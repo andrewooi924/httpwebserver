@@ -12,6 +12,20 @@
 #define PORT 8080
 #define BACKLOG 128
 
+void log_request(const http_request_t *req) {
+    fprintf(stderr, "%s %s %s", req->method, req->path, req->version);
+    if (req->query_count > 0) {
+        fprintf(stderr, " [");
+        for (int i = 0; i < req->query_count; i++) {
+            if (i > 0) fprintf(stderr, ", ");
+            fprintf(stderr, "%s=%s", req->query[i].key, req->query[i].value);
+        }
+        fprintf(stderr, "]");
+    }
+    fprintf(stderr, "\n");
+}
+
+
 void handle_connection(int fd) {
     http_request_t req;
     if (parse_http_request(fd, &req) < 0) {
@@ -28,6 +42,8 @@ void handle_connection(int fd) {
     if (strcmp(req.path, "/") == 0) {
         strcpy(req.path, "/index.html");
     }
+
+    log_request(&req);
 
     for (int i = 0; i < req.query_count; i++) {
     printf("Query param: %s = %s\n", req.query[i].key, req.query[i].value);
