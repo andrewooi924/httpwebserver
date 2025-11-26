@@ -1,6 +1,9 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -70,8 +73,19 @@ void handle_connection(int fd) {
         }
     }
 
-    free(req.body); // free if POST body allocated
+    if (strcmp(req.method, "DELETE") == 0) {
+        char full[PATH_MAX];
+        snprintf(full, sizeof(full), "www%s", req.path);
 
+        if (unlink(full) == 0) {
+            const char *resp = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            write(fd, resp, strlen(resp));
+        } else {
+            send_404(fd);
+        }
+    }
+ 
+    free(req.body); // free if POST body allocated
     close(fd);
 }
 
