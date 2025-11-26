@@ -99,9 +99,20 @@ int parse_http_request(int fd, http_request_t *req) {
 }
 
 void send_400(int fd) {
-    const char *s = "HTTP/1.1 400 Bad Request\r\nContent-Length: 11\r\n\r\nBad Request";
-    (void)write(fd, s, strlen(s));
+    const char *body = "<html><head><title>400 Bad Request</title></head>"
+                       "<body><h1>400 Bad Request</h1></body></html>";
+    char header[256];
+    int n = snprintf(header, sizeof(header),
+                     "HTTP/1.1 400 Bad Request\r\n"
+                     "Content-Length: %ld\r\n"
+                     "Content-Type: text/html\r\n"
+                     "Connection: close\r\n"
+                     "\r\n",
+                     strlen(body));
+    write(fd, header, n);
+    write(fd, body, strlen(body));
 }
+
 
 void send_404(int fd) {
     const char *body = "<html><head><title>404 Not Found</title></head>"
