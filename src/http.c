@@ -5,6 +5,27 @@
 #include <stdlib.h>
 #include <ctype.h>
 
+void parse_query_string(http_request_t *req) {
+    req->query_count = 0;
+    char *q = strchr(req->path, '?');
+    if (!q) return;
+
+    *q = 0; // terminate path before ?
+    q++;
+
+    char *pair = strtok(q, "&");
+    while (pair && req->query_count < MAX_QUERY_PARAMS) {
+        char *eq = strchr(pair, '=');
+        if (!eq) { pair = strtok(NULL, "&"); continue; }
+
+        *eq = 0;
+        strncpy(req->query[req->query_count].key, pair, 63);
+        strncpy(req->query[req->query_count].value, eq + 1, 255);
+        req->query_count++;
+        pair = strtok(NULL, "&");
+    }
+}
+
 ssize_t read_until_double_crlf(int fd, char *buf, size_t cap) {
     size_t used = 0;
     while (used < cap - 1) {
@@ -32,6 +53,8 @@ int parse_http_request(int fd, http_request_t *req) {
 
     // Parse request line
     if (sscanf(line, "%15s %1023s %15s", req->method, req->path, req->version) != 3) return -1;
+
+    parse_query_string(req);
 
     // Parse headers
     req->header_count = 0;

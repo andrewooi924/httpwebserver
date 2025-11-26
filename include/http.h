@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #define MAX_HEADERS 32
+#define MAX_QUERY_PARAMS 32
 
 typedef struct {
     char method[16];
@@ -15,6 +16,13 @@ typedef struct {
         char value[256];
     } headers[MAX_HEADERS];
     int header_count;
+
+    struct {
+        char key[64];
+        char value[256];
+    } query[MAX_QUERY_PARAMS];
+    int query_count;
+    
     char *body;
     size_t body_len;
 } http_request_t;

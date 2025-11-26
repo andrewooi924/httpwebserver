@@ -29,6 +29,10 @@ void handle_connection(int fd) {
         strcpy(req.path, "/index.html");
     }
 
+    for (int i = 0; i < req.query_count; i++) {
+    printf("Query param: %s = %s\n", req.query[i].key, req.query[i].value);
+    }
+
     if (serve_static(fd, "www", req.path) < 0) {
         send_404(fd);
     }
