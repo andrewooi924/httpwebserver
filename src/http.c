@@ -104,9 +104,20 @@ void send_400(int fd) {
 }
 
 void send_404(int fd) {
-    const char *s = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
-    (void)write(fd, s, strlen(s));
+    const char *body = "<html><head><title>404 Not Found</title></head>"
+                       "<body><h1>404 Not Found</h1></body></html>";
+    char header[256];
+    int n = snprintf(header, sizeof(header),
+                     "HTTP/1.1 404 Not Found\r\n"
+                     "Content-Length: %ld\r\n"
+                     "Content-Type: text/html\r\n"
+                     "Connection: close\r\n"
+                     "\r\n",
+                     strlen(body));
+    write(fd, header, n);
+    write(fd, body, strlen(body));
 }
+
 
 void send_500(int fd) {
     const char *s = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 21\r\n\r\nInternal Server Error";
