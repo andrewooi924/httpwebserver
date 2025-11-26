@@ -6,8 +6,10 @@
 #include <limits.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <fcntl.h>
 #include "http.h"
 #include "router.h"
 #include "threadpool.h"
@@ -98,6 +100,9 @@ int main(void) {
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
     if (listenfd < 0) { perror("socket"); return 1; }
 
+    int flags = fcntl(listenfd, F_GETFL, 0);
+    fcntl(listenfd, F_SETFL, flags | O_NONBLOCK);
+
     int opt = 1;
     setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -112,12 +117,44 @@ int main(void) {
     fprintf(stderr, "Listening on :%d\n", PORT);
 
     start_workers(8);
+    int clients[1024];
+    int client_count = 0;
+
     for (;;) {
-        struct sockaddr_in cli;
-        socklen_t cli_len = sizeof(cli);
-        int conn = accept(listenfd, (struct sockaddr*)&cli, &cli_len);
-        if (conn < 0) { perror("accept"); continue; }
-        push_conn(conn);
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(listenfd, &readfds);
+        int maxfd = listenfd;
+
+        for (int i = 0; i < client_count; i++) {
+            FD_SET(clients[i], &readfds);
+            if (clients[i] > maxfd) maxfd = clients[i];
+        }
+
+        int nready = select(maxfd + 1, &readfds, NULL, NULL, NULL);
+        if (nready < 0) { perror("select"); continue; }
+
+        // Accept new connections
+        if (FD_ISSET(listenfd, &readfds)) {
+            struct sockaddr_in cli;
+            socklen_t cli_len = sizeof(cli);
+            int conn = accept(listenfd, (struct sockaddr*)&cli, &cli_len);
+            if (conn >= 0) {
+                fcntl(conn, F_SETFL, O_NONBLOCK);
+                clients[client_count++] = conn;
+            }
+        }
+
+        // Handle client data
+        for (int i = 0; i < client_count; i++) {
+            int fd = clients[i];
+            if (FD_ISSET(fd, &readfds)) {
+                push_conn(fd);       // push to threadpool
+                // Remove from client array; thread will close it
+                clients[i] = clients[--client_count];
+                i--;
+            }
+        }
     }
 
     close(listenfd);
