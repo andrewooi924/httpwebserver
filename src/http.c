@@ -5,6 +5,13 @@
 #include <stdlib.h>
 #include <ctype.h>
 
+void send_set_cookie(int fd, const char *name, const char *value) {
+    char header[256];
+    int n = snprintf(header, sizeof(header),
+                     "Set-Cookie: %s=%s; Path=/; HttpOnly\r\n", name, value);
+    write(fd, header, n);
+}
+
 void parse_query_string(http_request_t *req) {
     req->query_count = 0;
     char *q = strchr(req->path, '?');
@@ -71,6 +78,25 @@ int parse_http_request(int fd, http_request_t *req) {
         strncpy(req->headers[req->header_count].name, name, 63);
         strncpy(req->headers[req->header_count].value, value, 255);
         req->header_count++;
+    }
+
+    req->cookie_count = 0;
+    for (int i = 0; i < req->header_count; i++) {
+        if (strcasecmp(req->headers[i].name, "Cookie") == 0) {
+            char *cookie_str = req->headers[i].value;
+            char *tok = strtok(cookie_str, ";");
+            while (tok && req->cookie_count < MAX_COOKIES) {
+                while (*tok && isspace(*tok)) tok++; // trim leading spaces
+                char *eq = strchr(tok, '=');
+                if (eq) {
+                    *eq = 0;
+                    strncpy(req->cookies[req->cookie_count].name, tok, 63);
+                    strncpy(req->cookies[req->cookie_count].value, eq + 1, 255);
+                    req->cookie_count++;
+                }
+                tok = strtok(NULL, ";");
+            }
+        }
     }
 
     // Check for body (Content-Length)

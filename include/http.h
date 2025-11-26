@@ -3,14 +3,23 @@
 
 #include <unistd.h>
 #include <stddef.h>
+#include <ctype.h>    // for isspace
+#include <strings.h>  // for strcasecmp
 
+#define MAX_COOKIES 16
 #define MAX_HEADERS 32
 #define MAX_QUERY_PARAMS 32
+
+typedef struct {
+    char name[64];
+    char value[256];
+} cookie_t;
 
 typedef struct {
     char method[16];
     char path[1024];
     char version[16];
+
     struct {
         char name[64];
         char value[256];
@@ -22,17 +31,20 @@ typedef struct {
         char value[256];
     } query[MAX_QUERY_PARAMS];
     int query_count;
-    
+
+    cookie_t cookies[MAX_COOKIES];
+    int cookie_count;
+
     char *body;
     size_t body_len;
 } http_request_t;
 
 ssize_t read_until_double_crlf(int fd, char *buf, size_t cap);
-
 int parse_http_request(int fd, http_request_t *req);
 
 void send_400(int fd);
 void send_404(int fd);
 void send_500(int fd);
+void send_set_cookie(int fd, const char *name, const char *value);
 
 #endif

@@ -84,6 +84,11 @@ void handle_connection(int fd) {
             send_404(fd);
         }
     }
+
+    // // Parse for cookies
+    // for (int i = 0; i < req.cookie_count; i++) {
+    //     printf("Cookie: %s = %s\n", req.cookies[i].name, req.cookies[i].value);
+    // }
  
     free(req.body); // free if POST body allocated
     close(fd);
