@@ -33,7 +33,9 @@ void handle_connection(int fd) {
         close(fd);
         return;
     }
-    if (strcmp(req.method, "GET") != 0 && strcmp(req.method, "HEAD") != 0) {
+    if (strcmp(req.method, "GET") != 0 && 
+        strcmp(req.method, "HEAD") != 0 &&
+        strcmp(req.method, "POST") != 0) {
         send_400(fd);
         close(fd);
         return;
@@ -51,8 +53,21 @@ void handle_connection(int fd) {
 
     int is_head = strcmp(req.method, "HEAD") == 0;
 
-    if (serve_static(fd, "www", req.path, is_head) < 0) {
-        send_404(fd);
+    if (strcmp(req.method, "POST") == 0) {
+        char header[256];
+        int n = snprintf(header, sizeof(header),
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Length: %ld\r\n"
+                        "Content-Type: text/plain\r\n"
+                        "Connection: close\r\n"
+                        "\r\n",
+                        req.body_len);
+        write(fd, header, n);
+        write(fd, req.body, req.body_len);
+    } else {
+        if (serve_static(fd, "www", req.path, is_head) < 0) {
+            send_404(fd);
+        }
     }
 
     free(req.body); // free if POST body allocated
