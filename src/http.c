@@ -100,15 +100,15 @@ int parse_http_request(int fd, http_request_t *req) {
 
 void send_400(int fd) {
     const char *s = "HTTP/1.1 400 Bad Request\r\nContent-Length: 11\r\n\r\nBad Request";
-    write(fd, s, strlen(s));
+    (void)write(fd, s, strlen(s));
 }
 
 void send_404(int fd) {
     const char *s = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
-    write(fd, s, strlen(s));
+    (void)write(fd, s, strlen(s));
 }
 
 void send_500(int fd) {
     const char *s = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 21\r\n\r\nInternal Server Error";
-    write(fd, s, strlen(s));
+    (void)write(fd, s, strlen(s));
 }

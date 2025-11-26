@@ -24,7 +24,7 @@ const char* guess_mime(const char *path) {
     return "application/octet-stream";
 }
 
-int serve_static(int fd, const char *root, const char *path) {
+int serve_static(int fd, const char *root, const char *path, int is_head) {
     char full[PATH_MAX];
     snprintf(full, sizeof(full), "%s%s", root, path);
 
@@ -47,14 +47,16 @@ int serve_static(int fd, const char *root, const char *path) {
                      "Connection: close\r\n"
                      "\r\n",
                      st.st_size, mime);
-    write(fd, header, n);
+    (void)write(fd, header, n);
 
-    off_t offset = 0;
-    while (offset < st.st_size) {
-        ssize_t sent = sendfile(fd, file_fd, &offset, st.st_size - offset);
-        if (sent <= 0) {
-            if (errno == EINTR) continue;
-            break;
+    if (!is_head) {
+        off_t offset = 0;
+        while (offset < st.st_size) {
+            ssize_t sent = sendfile(fd, file_fd, &offset, st.st_size - offset);
+            if (sent <= 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
         }
     }
 

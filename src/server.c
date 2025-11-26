@@ -49,7 +49,9 @@ void handle_connection(int fd) {
     printf("Query param: %s = %s\n", req.query[i].key, req.query[i].value);
     }
 
-    if (serve_static(fd, "www", req.path) < 0) {
+    int is_head = strcmp(req.method, "HEAD") == 0;
+
+    if (serve_static(fd, "www", req.path, is_head) < 0) {
         send_404(fd);
     }
 
