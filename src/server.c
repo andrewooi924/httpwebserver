@@ -13,29 +13,27 @@
 #define BACKLOG 128
 
 void handle_connection(int fd) {
-    char buf[8192];
-    ssize_t r = read_until_double_crlf(fd, buf, sizeof(buf));
-    if (r <= 0) { close(fd); return; }
-
-    char method[16], path[1024], ver[16];
-    if (sscanf(buf, "%15s %1023s %15s", method, path, ver) != 3) {
+    http_request_t req;
+    if (parse_http_request(fd, &req) < 0) {
         send_400(fd);
         close(fd);
         return;
     }
-    if (strcmp(method, "GET") != 0 && strcmp(method, "HEAD") != 0) {
+    if (strcmp(req.method, "GET") != 0 && strcmp(req.method, "HEAD") != 0) {
         send_400(fd);
         close(fd);
         return;
     }
 
-    if (strcmp(path, "/") == 0) {
-        strcpy(path, "/index.html");
+    if (strcmp(req.path, "/") == 0) {
+        strcpy(req.path, "/index.html");
     }
 
-    if (serve_static(fd, "www", path) < 0) {
+    if (serve_static(fd, "www", req.path) < 0) {
         send_404(fd);
     }
+
+    free(req.body); // free if POST body allocated
 
     close(fd);
 }

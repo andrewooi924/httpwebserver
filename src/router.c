@@ -1,58 +1,63 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include <limits.h>
-#include <errno.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <sys/sendfile.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdio.h>
 #include "router.h"
-#include "http.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/sendfile.h>
+#include <errno.h>
+#include <limits.h>
 
+const char* guess_mime(const char *path) {
+    const char *ext = strrchr(path, '.');
+    if (!ext) return "application/octet-stream";
+    if (strcmp(ext, ".html") == 0) return "text/html";
+    if (strcmp(ext, ".css") == 0) return "text/css";
+    if (strcmp(ext, ".js") == 0) return "application/javascript";
+    if (strcmp(ext, ".png") == 0) return "image/png";
+    if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) return "image/jpeg";
+    if (strcmp(ext, ".gif") == 0) return "image/gif";
+    if (strcmp(ext, ".txt") == 0) return "text/plain";
+    return "application/octet-stream";
+}
 
-extern const char *guess_mime(const char *);
-
-int serve_static(int fd, const char *docroot, const char *req_path) {
+int serve_static(int fd, const char *root, const char *path) {
     char full[PATH_MAX];
-    if (req_path[0] != '/') return -1;
-    // Normalize: prevent header like /../../
-    char rel[PATH_MAX];
-    snprintf(rel, sizeof(rel), "%s%s", docroot, req_path);
-    // if path ends with '/', append index.html
-    if (rel[strlen(rel)-1] == '/') strncat(rel, "index.html", sizeof(rel)-strlen(rel)-1);
+    snprintf(full, sizeof(full), "%s%s", root, path);
 
-    if (!realpath(rel, full)) return -1;
-
-    // ensure `full` starts with docroot realpath
-    char root_resolved[PATH_MAX];
-    if (!realpath(docroot, root_resolved)) return -1;
-    if (strncmp(full, root_resolved, strlen(root_resolved)) != 0) return -1;
+    int file_fd = open(full, O_RDONLY);
+    if (file_fd < 0) return -1;
 
     struct stat st;
-    if (stat(full, &st) < 0) return -1;
-    if (!S_ISREG(st.st_mode)) return -1;
-
-    int fdfile = open(full, O_RDONLY);
-    if (fdfile < 0) return -1;
+    if (fstat(file_fd, &st) < 0) {
+        close(file_fd);
+        return -1;
+    }
 
     const char *mime = guess_mime(full);
-    char hdr[512];
-    int n = snprintf(hdr, sizeof(hdr),
-                     "HTTP/1.0 200 OK\r\n"
-                     "Content-Length: %lld\r\n"
+
+    char header[512];
+    int n = snprintf(header, sizeof(header),
+                     "HTTP/1.1 200 OK\r\n"
+                     "Content-Length: %ld\r\n"
                      "Content-Type: %s\r\n"
                      "Connection: close\r\n"
                      "\r\n",
-                     (long long)st.st_size, mime);
-    (void)write(fd, hdr, n);
+                     st.st_size, mime);
+    write(fd, header, n);
 
-    off_t off = 0;
-    while (off < st.st_size) {
-        ssize_t sent = sendfile(fd, fdfile, &off, st.st_size - off);
-        if (sent <= 0) { if (errno == EINTR) continue; break; }
+    off_t offset = 0;
+    while (offset < st.st_size) {
+        ssize_t sent = sendfile(fd, file_fd, &offset, st.st_size - offset);
+        if (sent <= 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
     }
-    close(fdfile);
+
+    close(file_fd);
     return 0;
 }
