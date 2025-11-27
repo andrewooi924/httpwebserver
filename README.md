@@ -25,18 +25,18 @@ graph TD
     MainLoop -->|Incoming| Accept(Accept connections);
     MainLoop -->|Ready| Check(Check ready clients);
 
-    Accept --> WorkerPool;
-    Check --> WorkerPool;
+    Accept --> Workers;
+    Check --> Workers;
 
-    subgraph WorkerPool[Thread Pool Workers]
-        A[parse_http_request()]
-        B[Handle GET / POST / DELETE]
-        C[Serve static files / uploads]
-        D[Send response headers and body]
+    subgraph Workers [Thread Pool Workers]
+        parse(parse_http_request())
+        handle(Handle GET / POST / DELETE)
+        serve(Serve static files / uploads)
+        send(Send response headers and body)
     end
 
     style MainLoop fill:#F9F,stroke:#333,stroke-width:2px
-    style WorkerPool fill:#DFF,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5
+    style Workers fill:#DFF,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5
 ```
 
 ---
