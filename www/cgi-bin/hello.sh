@@ -1,4 +1,5 @@
 #!/bin/bash
+read input
 echo "Content-Type: text/plain"
 echo ""
-echo "Hello from CGI!"
+echo "Received POST: $input"

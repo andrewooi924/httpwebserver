@@ -73,17 +73,53 @@ void handle_connection(int fd) {
 
     int is_head = strcmp(req.method, "HEAD") == 0;
 
-    if (strcmp(req.method, "POST") == 0) {
-        char header[256];
-        int n = snprintf(header, sizeof(header),
-                        "HTTP/1.1 200 OK\r\n"
-                        "Content-Length: %ld\r\n"
-                        "Content-Type: text/plain\r\n"
-                        "Connection: close\r\n"
-                        "\r\n",
-                        req.body_len);
-        if (write_all(fd, header, n) < 0) perror("write_all header");
-        if (write_all(fd, req.body, req.body_len) < 0) perror("write_all body");
+    if (strcmp(req.method, "POST") == 0 && strncmp(req.path, "/cgi-bin/", 9) == 0) {
+        char full[PATH_MAX];
+        snprintf(full, sizeof(full), "www%s", req.path);
+
+        int stdout_pipe[2];
+        if (pipe(stdout_pipe) < 0) { send_500(fd); close(fd); return; }
+
+        int stdin_pipe[2];
+        if (pipe(stdin_pipe) < 0) { close(stdout_pipe[0]); close(stdout_pipe[1]); send_500(fd); return; }
+
+        pid_t pid = fork();
+        if (pid < 0) { send_500(fd); close(fd); return; }
+
+        if (pid == 0) {
+            // Child: redirect stdin/stdout to pipes
+            close(stdout_pipe[0]);
+            dup2(stdout_pipe[1], STDOUT_FILENO);
+            close(stdout_pipe[1]);
+
+            close(stdin_pipe[1]);
+            dup2(stdin_pipe[0], STDIN_FILENO);
+            close(stdin_pipe[0]);
+
+            execl(full, full, NULL);
+            perror("execl"); // if exec fails
+            exit(1);
+        }
+
+        // Parent: write POST body to child stdin
+        close(stdin_pipe[0]);
+        write(stdin_pipe[1], req.body, req.body_len);
+        close(stdin_pipe[1]);
+
+        // send HTTP headers before CGI output
+        const char *header = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+        write(fd, header, strlen(header));
+
+        // read CGI stdout and write to client
+        close(stdout_pipe[1]);
+        char buf[4096];
+        ssize_t n;
+        while ((n = read(stdout_pipe[0], buf, sizeof(buf))) > 0) {
+            write(fd, buf, n);
+        }
+        close(stdout_pipe[0]);
+
+        waitpid(pid, NULL, 0);
     } else {
         int is_cgi = strncmp(req.path, "/cgi-bin/", 9) == 0;
 
