@@ -29,9 +29,9 @@ graph TD
     Check --> Workers;
 
     subgraph Workers [Thread Pool Workers]
-        parse(parse_http_request())
-        handle(Handle GET / POST / DELETE)
-        serve(Serve static files / uploads)
+        parse(parse_http_request()); 
+        handle(Handle GET / POST / DELETE);
+        serve(Serve static files / uploads);
         send(Send response headers and body)
     end
 
