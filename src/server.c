@@ -50,187 +50,190 @@ void log_request(const http_request_t *req) {
 
 void handle_connection(int fd) {
     http_request_t req;
-    if (parse_http_request(fd, &req) < 0) {
-        send_400(fd);
-        close(fd);
-        return;
-    }
-    if (strcmp(req.method, "GET") != 0 && 
-        strcmp(req.method, "HEAD") != 0 &&
-        strcmp(req.method, "POST") != 0) {
-        send_400(fd);
-        close(fd);
-        return;
-    }
+    memset(&req, 0, sizeof(req));
+    int keep_alive = 0;
 
-    if (strcmp(req.path, "/") == 0) {
-        strcpy(req.path, "/index.html");
-    }
-
-    log_request(&req);
-
-    for (int i = 0; i < req.query_count; i++) {
-        printf("Query param: %s = %s\n", req.query[i].key, req.query[i].value);
-    }
-
-    int is_head = strcmp(req.method, "HEAD") == 0;
-
-    if (strcmp(req.method, "POST") == 0 && strncmp(req.path, "/cgi-bin/", 9) == 0) {
-        char full[PATH_MAX];
-        snprintf(full, sizeof(full), "www%s", req.path);
-
-        int pipefd[2];
-        if (pipe(pipefd) < 0) { send_500(fd); close(fd); return; }
-
-        pid_t pid = fork();
-        if (pid < 0) { send_500(fd); close(fd); return; }
-
-        if (pid == 0) {
-            // Child: set up stdout to pipe
-            close(pipefd[0]);
-            dup2(pipefd[1], STDOUT_FILENO);
-            close(pipefd[1]);
-
-            // Pass POST body via stdin
-            int stdin_pipe[2];
-            if (pipe(stdin_pipe) < 0) exit(1);
-            pid_t pid2 = fork();
-            if (pid2 == 0) {
-                // Grandchild: execute CGI
-                close(stdin_pipe[1]);
-                dup2(stdin_pipe[0], STDIN_FILENO);
-                close(stdin_pipe[0]);
-                execl(full, full, NULL);
-                exit(1);
-            } else {
-                // Child: write POST data to stdin
-                close(stdin_pipe[0]);
-                write(stdin_pipe[1], req.body, req.body_len);
-                close(stdin_pipe[1]);
-                waitpid(pid2, NULL, 0);
-                exit(0);
-            }
-        } else {
-            // Parent: read CGI output
-            close(pipefd[1]);
-            char buf[4096];
-            ssize_t n;
-            // Send minimal HTTP headers first
-            const char *header = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
-            write(fd, header, strlen(header));
-            while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
-                write(fd, buf, n);
-            }
-            close(pipefd[0]);
-            waitpid(pid, NULL, 0);
+    do {
+        if (parse_http_request(fd, &req) < 0) {
+            const char *resp = 
+                "HTTP/1.1 400 Bad Request\r\n"
+                "Content-Length: 0\r\n"
+                "Connection: close\r\n\r\n";
+            write(fd, resp, strlen(resp));
+            break;
         }
-    } else {
-        const char *ctype = NULL;
+
+        // Check Connection header
+        keep_alive = 0;
         for (int i = 0; i < req.header_count; i++) {
-            if (strcasecmp(req.headers[i].name, "Content-Type") == 0) {
-                ctype = req.headers[i].value;
+            if (strcasecmp(req.headers[i].name, "Connection") == 0 &&
+                strcasecmp(req.headers[i].value, "keep-alive") == 0) {
+                keep_alive = 1;
                 break;
             }
         }
 
-        if (ctype && strncmp(ctype, "multipart/form-data;", 20) == 0) {
-            const char *bstr = strstr(ctype, "boundary=");
-            if (!bstr) {
-                send_400(fd);
+        if (strcmp(req.method, "GET") != 0 &&
+            strcmp(req.method, "HEAD") != 0 &&
+            strcmp(req.method, "POST") != 0 &&
+            strcmp(req.method, "DELETE") != 0) {
+            const char *resp = 
+                "HTTP/1.1 400 Bad Request\r\n"
+                "Content-Length: 0\r\n"
+                "Connection: close\r\n\r\n";
+            write(fd, resp, strlen(resp));
+            close(fd);
+            return;
+        }
+
+        if (strcmp(req.path, "/") == 0) {
+            strcpy(req.path, "/index.html");
+        }
+
+        log_request(&req);
+
+        // GET/HEAD
+        if (strcmp(req.method, "GET") == 0 || strcmp(req.method, "HEAD") == 0) {
+            char fullpath[PATH_MAX];
+            snprintf(fullpath, sizeof(fullpath), "www%s", req.path);
+            FILE *f = fopen(fullpath, "rb");
+            if (!f) {
+                const char *resp = 
+                    "HTTP/1.1 404 Not Found\r\n"
+                    "Content-Length: 0\r\n"
+                    "Connection: close\r\n\r\n";
+                write(fd, resp, strlen(resp));
             } else {
-                char boundary[128];
-                snprintf(boundary, sizeof(boundary), "--%s", bstr + 9); // prefix "--"
+                fseek(f, 0, SEEK_END);
+                size_t len = ftell(f);
+                fseek(f, 0, SEEK_SET);
 
-                char *pos = req.body;
-                char *end = req.body + req.body_len;
+                char header[512];
+                int n = snprintf(header, sizeof(header),
+                                 "HTTP/1.1 200 OK\r\n"
+                                 "Content-Length: %zu\r\n"
+                                 "Content-Type: text/html\r\n"
+                                 "Connection: %s\r\n"
+                                 "Set-Cookie: visited=1\r\n\r\n",
+                                 len,
+                                 keep_alive ? "keep-alive" : "close");
+                write(fd, header, n);
 
-                mkdir("www/uploads", 0755); // ensure upload dir exists
-
-                while (pos < end) {
-                    char *part_start = strstr(pos, boundary);
-                    if (!part_start) break;
-                    part_start += strlen(boundary);
-                    if (strncmp(part_start, "\r\n", 2) == 0) part_start += 2;
-
-                    // find next boundary
-                    char *part_end = strstr(part_start, boundary);
-                    if (!part_end) break;
-
-                    // find headers
-                    char *header_end = strstr(part_start, "\r\n\r\n");
-                    if (!header_end) break;
-                    char *content = header_end + 4;
-
-                    // parse filename
-                    char filename[256] = {0};
-                    char *cd = strstr(part_start, "Content-Disposition:");
-                    if (cd) {
-                        char *fn = strstr(cd, "filename=\"");
-                        if (fn) {
-                            fn += 10;
-                            char *q = strchr(fn, '"');
-                            if (q) *q = 0;
-                            strncpy(filename, fn, sizeof(filename) - 1);
-                        }
+                if (strcmp(req.method, "GET") == 0) {
+                    char buf[4096];
+                    size_t r;
+                    while ((r = fread(buf, 1, sizeof(buf), f)) > 0) {
+                        write(fd, buf, r);
                     }
-
-                    // calculate content length safely
-                    size_t content_len = part_end - content;
-                    if (content_len >= 2 && content[content_len - 2] == '\r' && content[content_len - 1] == '\n') {
-                        content_len -= 2;
-                    }
-
-                    if (filename[0] && content_len > 0) {
-                        char fullpath[PATH_MAX];
-                        snprintf(fullpath, sizeof(fullpath), "www/uploads/%s", filename);
-                        FILE *f = fopen(fullpath, "wb");
-                        if (f) {
-                            fwrite(content, 1, content_len, f);
-                            fclose(f);
-                        }
-                    }
-
-                    pos = part_end;
                 }
+                fclose(f);
+            }
+        }
 
-                const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nUploaded successfully";
+        // POST handling (including file upload / multipart)
+        else if (strcmp(req.method, "POST") == 0) {
+            const char *ctype = NULL;
+            for (int i = 0; i < req.header_count; i++) {
+                if (strcasecmp(req.headers[i].name, "Content-Type") == 0) {
+                    ctype = req.headers[i].value;
+                    break;
+                }
+            }
+
+            if (ctype && strncmp(ctype, "multipart/form-data;", 20) == 0) {
+                const char *bstr = strstr(ctype, "boundary=");
+                if (!bstr) {
+                    const char *resp = 
+                        "HTTP/1.1 400 Bad Request\r\n"
+                        "Content-Length: 0\r\n"
+                        "Connection: close\r\n\r\n";
+                    write(fd, resp, strlen(resp));
+                } else {
+                    char boundary[128];
+                    snprintf(boundary, sizeof(boundary), "--%s", bstr + 9);
+                    char *pos = req.body;
+                    char *end = req.body + req.body_len;
+                    mkdir("www/uploads", 0755);
+
+                    while (pos < end) {
+                        char *part_start = strstr(pos, boundary);
+                        if (!part_start) break;
+                        part_start += strlen(boundary);
+                        if (strncmp(part_start, "\r\n", 2) == 0) part_start += 2;
+
+                        char *part_end = strstr(part_start, boundary);
+                        if (!part_end) break;
+
+                        char *header_end = strstr(part_start, "\r\n\r\n");
+                        if (!header_end) break;
+                        char *content = header_end + 4;
+
+                        char filename[256] = {0};
+                        char *cd = strstr(part_start, "Content-Disposition:");
+                        if (cd) {
+                            char *fn = strstr(cd, "filename=\"");
+                            if (fn) {
+                                fn += 10;
+                                char *q = strchr(fn, '"');
+                                if (q) *q = 0;
+                                strncpy(filename, fn, sizeof(filename)-1);
+                            }
+                        }
+
+                        size_t content_len = part_end - content;
+                        if (content_len >= 2 && content[content_len - 2] == '\r' &&
+                            content[content_len - 1] == '\n') content_len -= 2;
+
+                        if (filename[0] && content_len > 0) {
+                            char fullpath[PATH_MAX];
+                            snprintf(fullpath, sizeof(fullpath), "www/uploads/%s", filename);
+                            FILE *f = fopen(fullpath, "wb");
+                            if (f) {
+                                fwrite(content, 1, content_len, f);
+                                fclose(f);
+                            }
+                        }
+                        pos = part_end;
+                    }
+
+                    const char *resp = 
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nUploaded successfully";
+                    write(fd, resp, strlen(resp));
+                }
+            } else {
+                char header[256];
+                int n = snprintf(header, sizeof(header),
+                                 "HTTP/1.1 200 OK\r\n"
+                                 "Content-Length: %ld\r\n"
+                                 "Content-Type: text/plain\r\n"
+                                 "Connection: %s\r\n\r\n",
+                                 req.body_len,
+                                 keep_alive ? "keep-alive" : "close");
+                write(fd, header, n);
+                write(fd, req.body, req.body_len);
+            }
+        }
+
+        // DELETE
+        else if (strcmp(req.method, "DELETE") == 0) {
+            char full[PATH_MAX];
+            snprintf(full, sizeof(full), "www%s", req.path);
+            if (unlink(full) == 0) {
+                const char *resp = 
+                    "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                write(fd, resp, strlen(resp));
+            } else {
+                const char *resp = 
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                 write(fd, resp, strlen(resp));
             }
         }
-        else {
-            // fallback: echo POST body
-            char header[256];
-            int n = snprintf(header, sizeof(header),
-                            "HTTP/1.1 200 OK\r\n"
-                            "Content-Length: %ld\r\n"
-                            "Content-Type: text/plain\r\n"
-                            "Connection: close\r\n"
-                            "\r\n",
-                            req.body_len);
-            write(fd, header, n);
-            write(fd, req.body, req.body_len);
-        }
-    }
 
-    
+        free(req.body);
+        req.body = NULL;
 
-    if (strcmp(req.method, "DELETE") == 0) {
-        char full[PATH_MAX];
-        snprintf(full, sizeof(full), "www%s", req.path);
+    } while (keep_alive);
 
-        if (unlink(full) == 0) {
-            const char *resp = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            if (write_all(fd, resp, strlen(resp)) < 0) perror("write_all delete response");
-        } else {
-            send_404(fd);
-        }
-    }
-
-    if (strcmp(req.method, "GET") == 0) {
-        send_set_cookie(fd, "visited", "1");
-    }
-
-    free(req.body);
     close(fd);
 }
 
