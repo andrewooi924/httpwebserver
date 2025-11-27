@@ -35,8 +35,8 @@ graph TD
         send[Send response headers and body]
     end
 
-    style MainLoop fill:#F9F,stroke:#333,stroke-width:2px
-    style Workers fill:#DFF,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5
+    style MainLoop fill:#2E2E2E,stroke:#FFFFFF,stroke-width:2px
+    style Workers fill:#1E1E2E,stroke:#FFFFFF,stroke-width:2px,stroke-dasharray: 5 5
 ```
 
 ---
