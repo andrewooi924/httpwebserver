@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +17,20 @@
 
 #define PORT 8080
 #define BACKLOG 128
+
+ssize_t write_all(int fd, const void *buf, size_t count) {
+    size_t written = 0;
+    while (written < count) {
+        ssize_t r = write(fd, (const char*)buf + written, count - written);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            return -1;  // permanent error
+        }
+        written += r;
+    }
+    return written;
+}
+
 
 void log_request(const http_request_t *req) {
     fprintf(stderr, "%s %s %s", req->method, req->path, req->version);
@@ -53,7 +68,7 @@ void handle_connection(int fd) {
     log_request(&req);
 
     for (int i = 0; i < req.query_count; i++) {
-    printf("Query param: %s = %s\n", req.query[i].key, req.query[i].value);
+        printf("Query param: %s = %s\n", req.query[i].key, req.query[i].value);
     }
 
     int is_head = strcmp(req.method, "HEAD") == 0;
@@ -67,11 +82,50 @@ void handle_connection(int fd) {
                         "Connection: close\r\n"
                         "\r\n",
                         req.body_len);
-        write(fd, header, n);
-        write(fd, req.body, req.body_len);
+        if (write_all(fd, header, n) < 0) perror("write_all header");
+        if (write_all(fd, req.body, req.body_len) < 0) perror("write_all body");
     } else {
-        if (serve_static(fd, "www", req.path, is_head) < 0) {
-            send_404(fd);
+        int is_cgi = strncmp(req.path, "/cgi-bin/", 9) == 0;
+
+        if (strcmp(req.method, "GET") == 0 && is_cgi) {
+            char full[PATH_MAX];
+            snprintf(full, sizeof(full), "www%s", req.path);
+
+            int pipefd[2];
+            if (pipe(pipefd) < 0) {
+                send_500(fd);
+            } else {
+                pid_t pid = fork();
+                if (pid < 0) {
+                    send_500(fd);
+                } else if (pid == 0) {
+                    // Child process
+                    close(pipefd[0]);
+                    dup2(pipefd[1], STDOUT_FILENO);
+                    close(pipefd[1]);
+                    execl(full, full, NULL); // execute CGI script
+                    exit(1); // if exec fails
+                } else {
+                    // Parent process
+                    close(pipefd[1]);
+                    char buf[8192];
+                    ssize_t n;
+                    // send HTTP headers first
+                    const char *header = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+                    write(fd, header, strlen(header));
+
+                    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+                        write(fd, buf, n);
+                    }
+                    close(pipefd[0]);
+                    waitpid(pid, NULL, 0);
+                }
+            }
+        } else {
+            // Static file delivery
+            if (serve_static(fd, "www", req.path, is_head) < 0) {
+                send_404(fd);
+            }
         }
     }
 
@@ -81,18 +135,17 @@ void handle_connection(int fd) {
 
         if (unlink(full) == 0) {
             const char *resp = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            write(fd, resp, strlen(resp));
+            if (write_all(fd, resp, strlen(resp)) < 0) perror("write_all delete response");
         } else {
             send_404(fd);
         }
     }
 
-    // // Parse for cookies
-    // for (int i = 0; i < req.cookie_count; i++) {
-    //     printf("Cookie: %s = %s\n", req.cookies[i].name, req.cookies[i].value);
-    // }
- 
-    free(req.body); // free if POST body allocated
+    if (strcmp(req.method, "GET") == 0) {
+        send_set_cookie(fd, "visited", "1");
+    }
+
+    free(req.body);
     close(fd);
 }
 
@@ -124,15 +177,20 @@ int main(void) {
         fd_set readfds;
         FD_ZERO(&readfds);
         FD_SET(listenfd, &readfds);
+
         int maxfd = listenfd;
 
         for (int i = 0; i < client_count; i++) {
-            FD_SET(clients[i], &readfds);
-            if (clients[i] > maxfd) maxfd = clients[i];
+            int fd = clients[i];
+            FD_SET(fd, &readfds);
+            if (fd > maxfd) maxfd = fd;
         }
 
         int nready = select(maxfd + 1, &readfds, NULL, NULL, NULL);
-        if (nready < 0) { perror("select"); continue; }
+        if (nready < 0) {
+            perror("select");
+            continue;
+        }
 
         // Accept new connections
         if (FD_ISSET(listenfd, &readfds)) {
@@ -145,15 +203,31 @@ int main(void) {
             }
         }
 
-        // Handle client data
+        // Handle ready clients
         for (int i = 0; i < client_count; i++) {
             int fd = clients[i];
-            if (FD_ISSET(fd, &readfds)) {
-                push_conn(fd);       // push to threadpool
-                // Remove from client array; thread will close it
+            if (!FD_ISSET(fd, &readfds)) continue;
+
+            char tmp;
+            ssize_t r = recv(fd, &tmp, 1, MSG_PEEK);
+
+            if (r == 0) {
+                close(fd);
                 clients[i] = clients[--client_count];
                 i--;
+                continue;
             }
+
+            if (r < 0 && errno != EWOULDBLOCK && errno != EAGAIN) {
+                close(fd);
+                clients[i] = clients[--client_count];
+                i--;
+                continue;
+            }
+
+            push_conn(fd);
+            clients[i] = clients[--client_count];
+            i--;
         }
     }
 

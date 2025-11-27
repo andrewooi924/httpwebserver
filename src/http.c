@@ -9,7 +9,7 @@ void send_set_cookie(int fd, const char *name, const char *value) {
     char header[256];
     int n = snprintf(header, sizeof(header),
                      "Set-Cookie: %s=%s; Path=/; HttpOnly\r\n", name, value);
-    write(fd, header, n);
+    write_all(fd, header, n);
 }
 
 void parse_query_string(http_request_t *req) {
