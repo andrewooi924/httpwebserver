@@ -19,20 +19,20 @@ A lightweight, non-blocking HTTP server implemented in C. Supports `GET`, `HEAD`
 
 ```mermaid
 graph TD
-    Client[Client Browser] -->|Network Traffic| Socket(TCP Socket non-blocking);
-    Socket --> MainLoop{Main Loop select};
+    Client[Client Browser] -->|Network Traffic| Socket[TCP Socket non-blocking]
+    Socket --> MainLoop{Main Loop select}
 
-    MainLoop -->|Incoming| Accept(Accept connections);
-    MainLoop -->|Ready| Check(Check ready clients);
+    MainLoop -->|Incoming| Accept[Accept connections]
+    MainLoop -->|Ready| Check[Check ready clients]
 
-    Accept --> Workers;
-    Check --> Workers;
+    Accept --> Workers
+    Check --> Workers
 
     subgraph Workers [Thread Pool Workers]
-        parse(parse_http_request()); 
-        handle(Handle GET / POST / DELETE);
-        serve(Serve static files / uploads);
-        send(Send response headers and body)
+        parse[parse_http_request]
+        handle[Handle GET POST DELETE]
+        serve[Serve static files and uploads]
+        send[Send response headers and body]
     end
 
     style MainLoop fill:#F9F,stroke:#333,stroke-width:2px
