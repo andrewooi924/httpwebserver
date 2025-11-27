@@ -77,49 +77,51 @@ void handle_connection(int fd) {
         char full[PATH_MAX];
         snprintf(full, sizeof(full), "www%s", req.path);
 
-        int stdout_pipe[2];
-        if (pipe(stdout_pipe) < 0) { send_500(fd); close(fd); return; }
-
-        int stdin_pipe[2];
-        if (pipe(stdin_pipe) < 0) { close(stdout_pipe[0]); close(stdout_pipe[1]); send_500(fd); return; }
+        int pipefd[2];
+        if (pipe(pipefd) < 0) { send_500(fd); close(fd); return; }
 
         pid_t pid = fork();
         if (pid < 0) { send_500(fd); close(fd); return; }
 
         if (pid == 0) {
-            // Child: redirect stdin/stdout to pipes
-            close(stdout_pipe[0]);
-            dup2(stdout_pipe[1], STDOUT_FILENO);
-            close(stdout_pipe[1]);
+            // Child: set up stdout to pipe
+            close(pipefd[0]);
+            dup2(pipefd[1], STDOUT_FILENO);
+            close(pipefd[1]);
 
-            close(stdin_pipe[1]);
-            dup2(stdin_pipe[0], STDIN_FILENO);
-            close(stdin_pipe[0]);
-
-            execl(full, full, NULL);
-            perror("execl"); // if exec fails
-            exit(1);
+            // Pass POST body via stdin
+            int stdin_pipe[2];
+            if (pipe(stdin_pipe) < 0) exit(1);
+            pid_t pid2 = fork();
+            if (pid2 == 0) {
+                // Grandchild: execute CGI
+                close(stdin_pipe[1]);
+                dup2(stdin_pipe[0], STDIN_FILENO);
+                close(stdin_pipe[0]);
+                execl(full, full, NULL);
+                exit(1);
+            } else {
+                // Child: write POST data to stdin
+                close(stdin_pipe[0]);
+                write(stdin_pipe[1], req.body, req.body_len);
+                close(stdin_pipe[1]);
+                waitpid(pid2, NULL, 0);
+                exit(0);
+            }
+        } else {
+            // Parent: read CGI output
+            close(pipefd[1]);
+            char buf[4096];
+            ssize_t n;
+            // Send minimal HTTP headers first
+            const char *header = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+            write(fd, header, strlen(header));
+            while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+                write(fd, buf, n);
+            }
+            close(pipefd[0]);
+            waitpid(pid, NULL, 0);
         }
-
-        // Parent: write POST body to child stdin
-        close(stdin_pipe[0]);
-        write(stdin_pipe[1], req.body, req.body_len);
-        close(stdin_pipe[1]);
-
-        // send HTTP headers before CGI output
-        const char *header = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
-        write(fd, header, strlen(header));
-
-        // read CGI stdout and write to client
-        close(stdout_pipe[1]);
-        char buf[4096];
-        ssize_t n;
-        while ((n = read(stdout_pipe[0], buf, sizeof(buf))) > 0) {
-            write(fd, buf, n);
-        }
-        close(stdout_pipe[0]);
-
-        waitpid(pid, NULL, 0);
     } else {
         int is_cgi = strncmp(req.path, "/cgi-bin/", 9) == 0;
 
