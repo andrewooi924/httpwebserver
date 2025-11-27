@@ -9,6 +9,8 @@
 #include <arpa/inet.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <fcntl.h>
 #include "http.h"
@@ -123,49 +125,94 @@ void handle_connection(int fd) {
             waitpid(pid, NULL, 0);
         }
     } else {
-        int is_cgi = strncmp(req.path, "/cgi-bin/", 9) == 0;
-
-        if (strcmp(req.method, "GET") == 0 && is_cgi) {
-            char full[PATH_MAX];
-            snprintf(full, sizeof(full), "www%s", req.path);
-
-            int pipefd[2];
-            if (pipe(pipefd) < 0) {
-                send_500(fd);
-            } else {
-                pid_t pid = fork();
-                if (pid < 0) {
-                    send_500(fd);
-                } else if (pid == 0) {
-                    // Child process
-                    close(pipefd[0]);
-                    dup2(pipefd[1], STDOUT_FILENO);
-                    close(pipefd[1]);
-                    execl(full, full, NULL); // execute CGI script
-                    exit(1); // if exec fails
-                } else {
-                    // Parent process
-                    close(pipefd[1]);
-                    char buf[8192];
-                    ssize_t n;
-                    // send HTTP headers first
-                    const char *header = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
-                    write(fd, header, strlen(header));
-
-                    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
-                        write(fd, buf, n);
-                    }
-                    close(pipefd[0]);
-                    waitpid(pid, NULL, 0);
-                }
-            }
-        } else {
-            // Static file delivery
-            if (serve_static(fd, "www", req.path, is_head) < 0) {
-                send_404(fd);
+        const char *ctype = NULL;
+        for (int i = 0; i < req.header_count; i++) {
+            if (strcasecmp(req.headers[i].name, "Content-Type") == 0) {
+                ctype = req.headers[i].value;
+                break;
             }
         }
+
+        if (ctype && strncmp(ctype, "multipart/form-data;", 20) == 0) {
+            const char *bstr = strstr(ctype, "boundary=");
+            if (!bstr) {
+                send_400(fd);
+            } else {
+                char boundary[128];
+                snprintf(boundary, sizeof(boundary), "--%s", bstr + 9); // prefix "--"
+
+                char *pos = req.body;
+                char *end = req.body + req.body_len;
+
+                mkdir("www/uploads", 0755); // ensure upload dir exists
+
+                while (pos < end) {
+                    char *part_start = strstr(pos, boundary);
+                    if (!part_start) break;
+                    part_start += strlen(boundary);
+                    if (strncmp(part_start, "\r\n", 2) == 0) part_start += 2;
+
+                    // find next boundary
+                    char *part_end = strstr(part_start, boundary);
+                    if (!part_end) break;
+
+                    // find headers
+                    char *header_end = strstr(part_start, "\r\n\r\n");
+                    if (!header_end) break;
+                    char *content = header_end + 4;
+
+                    // parse filename
+                    char filename[256] = {0};
+                    char *cd = strstr(part_start, "Content-Disposition:");
+                    if (cd) {
+                        char *fn = strstr(cd, "filename=\"");
+                        if (fn) {
+                            fn += 10;
+                            char *q = strchr(fn, '"');
+                            if (q) *q = 0;
+                            strncpy(filename, fn, sizeof(filename) - 1);
+                        }
+                    }
+
+                    // calculate content length safely
+                    size_t content_len = part_end - content;
+                    if (content_len >= 2 && content[content_len - 2] == '\r' && content[content_len - 1] == '\n') {
+                        content_len -= 2;
+                    }
+
+                    if (filename[0] && content_len > 0) {
+                        char fullpath[PATH_MAX];
+                        snprintf(fullpath, sizeof(fullpath), "www/uploads/%s", filename);
+                        FILE *f = fopen(fullpath, "wb");
+                        if (f) {
+                            fwrite(content, 1, content_len, f);
+                            fclose(f);
+                        }
+                    }
+
+                    pos = part_end;
+                }
+
+                const char *resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nUploaded successfully";
+                write(fd, resp, strlen(resp));
+            }
+        }
+        else {
+            // fallback: echo POST body
+            char header[256];
+            int n = snprintf(header, sizeof(header),
+                            "HTTP/1.1 200 OK\r\n"
+                            "Content-Length: %ld\r\n"
+                            "Content-Type: text/plain\r\n"
+                            "Connection: close\r\n"
+                            "\r\n",
+                            req.body_len);
+            write(fd, header, n);
+            write(fd, req.body, req.body_len);
+        }
     }
+
+    
 
     if (strcmp(req.method, "DELETE") == 0) {
         char full[PATH_MAX];
