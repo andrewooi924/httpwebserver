@@ -15,30 +15,28 @@ A lightweight, non-blocking HTTP server implemented in C. Supports `GET`, `HEAD`
 - Logs requests to `stderr`
 - Persistent connections with `keep-alive`
 
----
-
 ## Architecture Overview
 
 ```mermaid
 graph TD
-    Client[Client Browser] -->|Network Traffic| Socket(TCP Socket\nnon-blocking);
-    Socket --> MainLoop{Main Loop\nselect};
+    Client[Client Browser] -->|Network Traffic| Socket(TCP Socket non-blocking);
+    Socket --> MainLoop{Main Loop select};
 
-    MainLoop -->|Incoming| Accept[Accept connections];
-    MainLoop -->|Readable/Writable| Check[Check ready clients];
+    MainLoop -->|Incoming| Accept(Accept connections);
+    MainLoop -->|Ready| Check(Check ready clients);
 
-    Accept -->pool[Thread Pool Workers];
-    Check -->pool;
+    Accept --> WorkerPool;
+    Check --> WorkerPool;
 
-    subgraph Worker Responsibilities
-        pool --> task1[parse_http_request()];
-        pool --> task2[Handle GET / POST / DELETE];
-        pool --> task3[Serve static files / uploads];
-        pool --> task4[Send response headers and body];
+    subgraph WorkerPool[Thread Pool Workers]
+        A[parse_http_request()]
+        B[Handle GET / POST / DELETE]
+        C[Serve static files / uploads]
+        D[Send response headers and body]
     end
 
-    style MainLoop fill:#f9f,stroke:#333,stroke-width:2px
-    style pool fill:#dff,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5
+    style MainLoop fill:#F9F,stroke:#333,stroke-width:2px
+    style WorkerPool fill:#DFF,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5
 ```
 
 ---
