@@ -55,6 +55,10 @@ int serve_static(int fd, const char *root, const char *path, int is_head) {
             ssize_t sent = sendfile(fd, file_fd, &offset, st.st_size - offset);
             if (sent <= 0) {
                 if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    usleep(1000);
+                    continue;
+                }
                 break;
             }
         }

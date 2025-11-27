@@ -26,13 +26,17 @@ ssize_t write_all(int fd, const void *buf, size_t count) {
         ssize_t r = write(fd, (const char*)buf + written, count - written);
         if (r < 0) {
             if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Yield CPU briefly if socket not ready
+                usleep(1000);
+                continue;
+            }
             return -1;  // permanent error
         }
         written += r;
     }
     return written;
 }
-
 
 void log_request(const http_request_t *req) {
     fprintf(stderr, "%s %s %s", req->method, req->path, req->version);

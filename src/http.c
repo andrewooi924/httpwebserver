@@ -1,4 +1,8 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "http.h"
+#include <limits.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -37,9 +41,17 @@ ssize_t read_until_double_crlf(int fd, char *buf, size_t cap) {
     size_t used = 0;
     while (used < cap - 1) {
         ssize_t r = read(fd, buf + used, 1);
-        if (r <= 0) break;
+        if (r == 0) break; // EOF
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                usleep(1000);
+                continue;
+            }
+            break;
+        }
         used += r;
-        if (used >= 4 && 
+        if (used >= 4 &&
             buf[used-4] == '\r' && buf[used-3] == '\n' &&
             buf[used-2] == '\r' && buf[used-1] == '\n') {
             buf[used] = 0;
@@ -111,7 +123,15 @@ int parse_http_request(int fd, http_request_t *req) {
                 size_t received = 0;
                 while (received < req->body_len) {
                     ssize_t r = read(fd, req->body + received, req->body_len - received);
-                    if (r <= 0) break;
+                    if (r == 0) break;
+                    if (r < 0) {
+                        if (errno == EINTR) continue;
+                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                            usleep(1000);
+                            continue;
+                        }
+                        break;
+                    }
                     received += r;
                 }
                 req->body[received] = 0;
